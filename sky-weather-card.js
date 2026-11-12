@@ -87,6 +87,7 @@ class SkyWeatherCard extends HTMLElement {
   set hass(hass) {
     const first = !this._hass;
     this._hass = hass;
+    if (this._popupCard) this._popupCard.hass = hass;
     const st = hass.states[this._config.entity];
     const key = st && st.last_updated + (hass.states["sun.sun"]?.state || "");
     if (first) this._resubscribe();
@@ -108,8 +109,57 @@ class SkyWeatherCard extends HTMLElement {
     this._subs = [sub("hourly"), sub("daily")];
   }
 
-  getCardSize() { return 7; }
+  getCardSize() { return this._config?.layout === "widget" ? 3 : 7; }
   getGridOptions() { return { columns: 12, min_columns: 6, rows: "auto" }; }
+
+  // Opens the full forecast in a modal sheet. A native <dialog> sits in the browser's
+  // top layer, so dashboard transforms/backdrop-filters can't clip or mis-position it.
+  _openPopup() {
+    if (this._dialog) return;
+    if (!document.getElementById("sky-weather-dialog-style")) {
+      const s = document.createElement("style");
+      s.id = "sky-weather-dialog-style";
+      s.textContent = `
+        dialog.sky-weather-dialog { padding:0; border:none; background:transparent; color:#fff;
+          width:min(420px, calc(100vw - 24px)); max-height:calc(100dvh - 32px); overflow:auto;
+          border-radius:22px; scrollbar-width:none; overscroll-behavior:contain; }
+        dialog.sky-weather-dialog::-webkit-scrollbar { display:none; }
+        dialog.sky-weather-dialog::backdrop { background:rgba(0,0,0,.4); -webkit-backdrop-filter:blur(14px); backdrop-filter:blur(14px); }
+        dialog.sky-weather-dialog[open] { animation: skyIn .28s cubic-bezier(.2,.8,.2,1); }
+        @keyframes skyIn { from { opacity:0; transform:translateY(12px) scale(.97); } to { opacity:1; transform:none; } }
+        @media (prefers-reduced-motion: reduce) { dialog.sky-weather-dialog[open] { animation:none; } }
+        .sky-weather-dialog .sky-close { position:sticky; top:10px; float:right; margin:10px 10px -46px 0; z-index:5;
+          width:32px; height:32px; border-radius:50%; border:none; cursor:pointer; color:#fff; font-size:18px; line-height:32px;
+          background:rgba(0,0,0,.28); -webkit-backdrop-filter:blur(10px); backdrop-filter:blur(10px); }
+        .sky-weather-dialog .sky-close:focus-visible, .sky-weather-dialog .sky-more:focus-visible { outline:2px solid #fff; outline-offset:2px; }
+        .sky-weather-dialog .sky-more { display:block; width:100%; margin-top:8px; padding:12px; border:none; border-radius:14px; cursor:pointer;
+          font:500 .95rem -apple-system, "SF Pro Text", system-ui, sans-serif; color:#fff;
+          background:rgba(255,255,255,.12); -webkit-backdrop-filter:blur(14px); backdrop-filter:blur(14px); }`;
+      document.head.appendChild(s);
+    }
+    const dlg = document.createElement("dialog");
+    dlg.className = "sky-weather-dialog";
+    dlg.setAttribute("aria-label", `${this._config.name || "Weather"} forecast`);
+    const close = document.createElement("button");
+    close.className = "sky-close"; close.setAttribute("aria-label", "Close"); close.textContent = "✕";
+    const card = document.createElement("sky-weather-card");
+    card.setConfig({ ...this._config, layout: "full", tap_action: "none" });
+    const more = document.createElement("button");
+    more.className = "sky-more"; more.textContent = "More details";
+    dlg.append(close, card, more);
+    document.body.appendChild(dlg);
+    card.hass = this._hass;
+    this._dialog = dlg; this._popupCard = card;
+    const done = () => dlg.close();
+    close.addEventListener("click", done);
+    dlg.addEventListener("click", (e) => { if (e.target === dlg) done(); }); // backdrop tap
+    more.addEventListener("click", () => {
+      done();
+      this.dispatchEvent(new CustomEvent("hass-more-info", { bubbles: true, composed: true, detail: { entityId: this._config.entity } }));
+    });
+    dlg.addEventListener("close", () => { dlg.remove(); this._dialog = this._popupCard = null; this.shadowRoot.querySelector("ha-card")?.focus(); });
+    dlg.showModal();
+  }
   static getStubConfig(hass) { return { entity: Object.keys(hass.states).find((e) => e.startsWith("weather.")) }; }
 
   _fmtHour(iso) {
@@ -155,6 +205,9 @@ class SkyWeatherCard extends HTMLElement {
     const [top, bottom] = skyFor(st.state, night);
     // HIG: over bright backgrounds, add a 35% dimming layer so white text stays legible
     const bright = ["snowy", "snowy-rainy", "hail"].includes(st.state);
+    const widget = this._config.layout === "widget";
+    const interactive = this._config.tap_action !== "none";
+    const place = this._config.name || a.friendly_name || "Weather";
     const hourly = (this._hourly || []).slice(0, this._config.hours);
     const daily = (this._daily || []).slice(0, this._config.days);
     const today = daily[0];
@@ -253,15 +306,50 @@ class SkyWeatherCard extends HTMLElement {
         .details { display:grid; grid-template-columns: repeat(auto-fit, minmax(70px, 1fr)); gap: 8px; }
         .det { text-align:left; }
         .det b { display:block; font-size: 1.15rem; font-weight: 500; margin-top: 2px; }
+        /* Widget layout: medium home-screen-widget proportions */
+        ha-card.widget { padding: 14px 16px 14px; }
+        ha-card.static { cursor: default; }
+        .w-top { display:flex; justify-content:space-between; align-items:flex-start; gap: 12px; }
+        .w-place { font-size: .95rem; font-weight: 600; display:flex; align-items:center; gap:4px; }
+        .w-place svg { width: 11px; height: 11px; }
+        .w-temp { font-size: 2.9rem; line-height: 1.05; font-weight: 300; letter-spacing: -0.02em; margin-left: -2px; }
+        .w-right { text-align:right; display:flex; flex-direction:column; align-items:flex-end; }
+        .w-right svg { width: 26px; height: 26px; display:block; margin-bottom: 4px; filter: drop-shadow(0 1px 1px rgba(0,0,0,.12)); }
+        .w-cond, .w-hl { font-size: .82rem; font-weight: 600; }
+        .w-hours { display:grid; grid-template-columns: repeat(6, 1fr); margin-top: 12px; }
+        .w-hours .hour { min-width: 0; gap: 4px; }
+        .w-hours .h-time { font-size: .75rem; color: var(--label-2); }
+        .w-hours .h-icon svg { width: 24px; height: 24px; }
+        .w-hours .h-temp { font-size: .9rem; }
+        ha-card:focus-visible { outline: 2px solid #fff; outline-offset: -4px; }
         /* Accessibility settings: thicker, opaque material and stronger labels */
         @media (prefers-reduced-transparency: reduce) { .panel { background: rgba(0,0,0,.32); backdrop-filter:none; -webkit-backdrop-filter:none; } }
         @media (prefers-contrast: more) {
           :host { --label-2: rgba(255,255,255,.85); --label-3: rgba(255,255,255,.7); --separator: rgba(255,255,255,.4); --material: rgba(0,0,0,.35); }
         }
       </style>
-      <ha-card role="button" tabindex="0" aria-label="${this._config.name || a.friendly_name} weather: ${r(a.temperature)} degrees, ${LABELS[st.state] || st.state}">
+      <ha-card class="${widget ? "widget" : ""} ${interactive ? "" : "static"}" ${interactive ? `role="button" tabindex="0"` : ""} aria-label="${place} weather: ${r(a.temperature)} degrees, ${LABELS[st.state] || st.state}${widget ? ". Opens full forecast" : ""}">
         <div class="sky"></div>
         <div class="inner">
+        ${widget ? `
+        <div class="w-top">
+          <div>
+            <div class="w-place">${place}<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M11 1L1 5.2l4.4 1.4L6.8 11z" fill="#fff"/></svg></div>
+            <div class="w-temp">${r(a.temperature)}${unit}</div>
+          </div>
+          <div class="w-right">
+            ${iconSvg(st.state, night)}
+            <div class="w-cond">${LABELS[st.state] || st.state}</div>
+            ${today ? `<div class="w-hl">H:${r(today.temperature)}${unit} L:${r(today.templow)}${unit}</div>` : ""}
+          </div>
+        </div>
+        ${hourly.length ? `<div class="w-hours">${hourly.slice(0, 6).map((h, i) => `
+          <div class="hour">
+            <div class="h-time">${i === 0 ? "Now" : this._fmtHour(h.datetime)}</div>
+            <div class="h-icon">${iconSvg(h.condition, this._isNightAt(h.datetime))}</div>
+            <div class="h-temp">${r(i === 0 ? a.temperature : h.temperature)}${unit}</div>
+          </div>`).join("")}</div>` : ""}
+        ` : `
         <div class="hero">
           <div class="place">${this._config.name || a.friendly_name || "Weather"}</div>
           <div class="temp">${r(a.temperature)}${unit}</div>
@@ -277,15 +365,20 @@ class SkyWeatherCard extends HTMLElement {
           <div class="days">${daysHtml}</div>
         </div>` : ""}
         ${details.length ? `<div class="panel details">${details.map(([k, v]) => `<div class="det"><span class="label">${k}</span><b>${v}</b></div>`).join("")}</div>` : ""}
+        `}
         </div>
       </ha-card>`;
 
+    if (!interactive) return;
     const card = this.shadowRoot.querySelector("ha-card");
-    const open = () => this.dispatchEvent(new CustomEvent("hass-more-info", { bubbles: true, composed: true, detail: { entityId: this._config.entity } }));
+    // widget → full forecast popup; full layout → Home Assistant more-info
+    const open = widget
+      ? () => this._openPopup()
+      : () => this.dispatchEvent(new CustomEvent("hass-more-info", { bubbles: true, composed: true, detail: { entityId: this._config.entity } }));
     card.addEventListener("click", open);
     card.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
     // keep horizontal scroll from opening more-info
-    this.shadowRoot.querySelector(".hours")?.addEventListener("click", (e) => e.stopPropagation());
+    if (!widget) this.shadowRoot.querySelector(".hours")?.addEventListener("click", (e) => e.stopPropagation());
   }
 }
 
