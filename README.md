@@ -9,7 +9,7 @@ Styling follows Apple's Human Interface Guidelines on charting data and material
 Add a dashboard resource (**Settings → Dashboards → ⋮ → Resources**), type **JavaScript module**:
 
 ```
-https://cdn.jsdelivr.net/gh/legogit007/sky-weather-card@v1.1.0/sky-weather-card.js
+https://cdn.jsdelivr.net/gh/legogit007/sky-weather-card@v1.2.0/sky-weather-card.js
 ```
 
 Or copy `sky-weather-card.js` to `/config/www/` and use `/local/sky-weather-card.js`.
@@ -24,6 +24,7 @@ layout: widget  # optional: "widget" (compact tile) or "full" (default)
 hours: 12       # optional, hourly items
 days: 7         # optional, daily rows
 tap_action: none  # optional, disables tapping
+hourly_entity: weather.your_town_hourly  # optional, for providers like BoM that split hourly forecasts
 ```
 
 **Widget layout** is a compact tile with the place, temperature, condition, H/L and the next six hours. Tapping it opens the full forecast in a popup. Close the popup with ✕, Escape, or a tap outside it. **More details** in the popup opens Home Assistant's standard weather dialog.

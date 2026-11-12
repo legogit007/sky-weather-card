@@ -2,6 +2,7 @@
  * Sky Weather Card — a calm, glanceable weather card for Home Assistant.
  * type: custom:sky-weather-card
  * entity: weather.forecast_home      (required)
+ * hourly_entity: weather.x_hourly    (optional, if hourly forecasts live on a separate entity, e.g. BoM)
  * name: Home                         (optional)
  * hours: 12                          (optional, hourly items)
  * days: 7                            (optional, daily rows)
@@ -102,10 +103,12 @@ class SkyWeatherCard extends HTMLElement {
   _resubscribe() {
     if (!this._hass || !this._config || !this.isConnected) return;
     this._unsub();
+    // Some providers (e.g. BoM) split hourly and daily forecasts across two entities
     const sub = (type) => this._hass.connection.subscribeMessage(
       (msg) => { this[type === "hourly" ? "_hourly" : "_daily"] = msg.forecast || []; this._render(); },
-      { type: "weather/subscribe_forecast", forecast_type: type, entity_id: this._config.entity }
-    );
+      { type: "weather/subscribe_forecast", forecast_type: type,
+        entity_id: type === "hourly" && this._config.hourly_entity ? this._config.hourly_entity : this._config.entity }
+    ).catch(() => null);
     this._subs = [sub("hourly"), sub("daily")];
   }
 
